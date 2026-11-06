@@ -5,3 +5,4 @@
 coverage.out
 /releasefloor
 /releasefloor.exe
+__pycache__/

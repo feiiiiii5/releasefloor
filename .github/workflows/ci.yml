@@ -1,6 +1,7 @@
 name: Validate ReleaseFloor
 on:
   push:
+    branches: ['**']
     paths-ignore:
       - '*.md'
       - 'docs/**'
@@ -12,6 +13,9 @@ on:
       - 'LICENSE'
 permissions:
   contents: read
+concurrency:
+  group: validate-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     strategy:
