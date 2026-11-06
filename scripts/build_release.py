@@ -38,10 +38,11 @@ def main() -> None:
             )
             payload = raw.read_bytes()
             base = f"releasefloor-{version}-{platform}-{arch}"
+            members = ((name, payload), ("LICENSE", (root / "LICENSE").read_bytes()), ("THIRD_PARTY_NOTICES.txt", (root / "THIRD_PARTY_NOTICES.txt").read_bytes()))
             if platform == "windows":
                 dest = out / (base + ".zip")
                 with zipfile.ZipFile(dest, "x", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
-                    for member, content in ((name, payload), ("LICENSE", (root / "LICENSE").read_bytes())):
+                    for member, content in members:
                         info = zipfile.ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0))
                         info.compress_type = zipfile.ZIP_DEFLATED
                         info.external_attr = (0o100755 if member == name else 0o100644) << 16
@@ -49,7 +50,7 @@ def main() -> None:
             else:
                 dest = out / (base + ".tar.gz")
                 with dest.open("xb") as stream, gzip.GzipFile(filename="", fileobj=stream, mode="wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as archive:
-                    for member, content in ((name, payload), ("LICENSE", (root / "LICENSE").read_bytes())):
+                    for member, content in members:
                         info = tarfile.TarInfo(member)
                         info.size, info.mode, info.mtime = len(content), (0o755 if member == name else 0o644), 0
                         archive.addfile(info, io.BytesIO(content))

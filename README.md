@@ -12,6 +12,8 @@ For example, a rebuilt CLI may start requiring a newer GLIBC version, a bundled 
 
 [Download a prebuilt command](https://github.com/feiiiiii5/releasefloor/releases) for Linux, macOS or Windows, or install from source with `go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0`. Windows is supported as a host; PE input inspection is outside 0.1. Extract the release archive and run `releasefloor version` (`releasefloor.exe version` on Windows). Verify the archive against the release's `SHA256SUMS` through your normal trusted download process.
 
+The prebuilt macOS commands record a minimum OS of 13.0. [Validation details](docs/VALIDATION.md) separate source CI, inspected public artifacts and execution of packaged commands. Distributions include [Go's license notice](THIRD_PARTY_NOTICES.txt) alongside the project license.
+
 Independent project developed with AI coding assistance. The implementation and synthetic fixtures are original; format references and competing tools are documented in the product notes.
 
 ## Reproduce the example
