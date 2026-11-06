@@ -10,7 +10,7 @@ For example, a rebuilt CLI may start requiring a newer GLIBC version, a bundled 
 
 [中文说明](README.zh-CN.md) · [Exact contract](docs/CONTRACT.md) · [Product decision and alternatives](docs/PRODUCT.md)
 
-[Download a prebuilt command](https://github.com/feiiiiii5/releasefloor/releases) for Linux, macOS or Windows, or install from source with `go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0`. Windows is supported as a host; PE input inspection is outside 0.1. Extract the release archive and run `releasefloor version` (`releasefloor.exe version` on Windows). Verify the archive against the release's `SHA256SUMS` through your normal trusted download process.
+[Download a prebuilt command](https://github.com/feiiiiii5/releasefloor/releases/tag/v0.1.0) for Linux, macOS or Windows, or install from source with `go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0`. Windows is supported as a host; PE input inspection is outside 0.1. Extract the release archive and, from that directory, run `./releasefloor version` on Linux/macOS or `.\releasefloor.exe version` in Windows PowerShell. Verify the archive against the release's `SHA256SUMS` through your normal trusted download process. Add its directory to your PATH if you want to invoke the command elsewhere.
 
 The prebuilt macOS commands record a minimum OS of 13.0. [Validation details](docs/VALIDATION.md) separate source CI, inspected public artifacts and execution of packaged commands. Distributions include [Go's license notice](THIRD_PARTY_NOTICES.txt) alongside the project license.
 
@@ -18,9 +18,13 @@ Independent project developed with AI coding assistance. The implementation and 
 
 ## Reproduce the example
 
-The repository includes an original metadata-fixture generator. Its files describe synthetic object-format headers; they are **not runnable programs** and contain no third-party binaries.
+For a prebuilt command, download and unpack `releasefloor-examples.zip` from the same release. In the examples directory, run `/path/to/releasefloor compare old.zip new.zip` (replace `/path/to/releasefloor` with the extracted command's actual path). Expected exit: **1**. `check --policy policy.json old.zip` passes; `new.zip` blocks. The accompanying `releasefloor-demo.html` is a ready-made report of those synthetic files.
+
+To regenerate the examples from source, first clone the repository and enter its root. The generator creates synthetic object-format headers; they are **not runnable programs** and contain no third-party binaries.
 
 ```sh
+git clone https://github.com/feiiiiii5/releasefloor.git
+cd releasefloor
 go run ./examples/generate --out output/demo
 go build -o releasefloor ./cmd/releasefloor
 ./releasefloor compare --format html --output output/comparison.html output/demo/old.zip output/demo/new.zip

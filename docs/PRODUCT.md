@@ -76,7 +76,7 @@ Continue only long enough to establish whether the narrow check helps a real rel
 
 Stop or contribute to an existing tool if current scripts or the alternatives already handle the task adequately, if the remaining difference is mainly presentation, or if maintaining reliable coverage costs more than the demonstrated benefit. Do not create artificial shortcomings in competing tools to keep the project alive.
 
-Expand investment only after **two subsequent independent real release tasks** use the output to inform an actual release or installer-maintenance decision. This is an evidence target, not a forecast or a claim of current adoption. Record what the output changed, what the existing process missed and whether the tool was used again. Completing implementation or a validation run alone does not meet that threshold.
+Expand investment only after **two independent external maintainers use the output in real release or installer-maintenance decisions**. This is an evidence target, not a forecast or a claim of current adoption. Record what the output changed, what the existing process missed and whether the tool was used again. Our own releases, implementation tests and validation runs do not meet that threshold.
 
 ## Verification status
 

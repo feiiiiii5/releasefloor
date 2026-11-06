@@ -1,10 +1,6 @@
 # ReleaseFloor
 
-[下载版本](https://github.com/feiiiiii5/releasefloor/releases) · [English](README.md)
-
-可复现示例：先运行 `go run ./examples/generate --out output/demo`，再构建命令，比较 `output/demo/old.zip` 与 `output/demo/new.zip`。生成器只创建原创的格式元数据，不是可执行程序。候选包提高 GLIBC、GLIBCXX 和 macOS 最低版本，并丢失一个 arm64 slice，比较命令应返回 1。使用 `--format html --output output/comparison.html` 查看离线报告；重复生成或导出时选择新路径。
-
-Mach-O 同一动态库提供者的记录兼容版本提高，或弱依赖变为强依赖，也会阻断比较并要求复核；弱与强依赖分别比较。这不代表已证明实际 ABI 不兼容。
+[下载版本](https://github.com/feiiiiii5/releasefloor/releases/tag/v0.1.0) · [English](README.md)
 
 发布前检查：新构建的归档包是否提高了运行环境要求，或漏掉了原有架构。
 
@@ -16,9 +12,27 @@ ReleaseFloor 是一个实验性的本地命令行工具，面向发布维护者�
 
 [English](README.md) · [精确行为约定](docs/CONTRACT.md) · [立项依据与替代方案](docs/PRODUCT.md)
 
+## 安装与可复现示例
+
+从版本页面下载与你的系统和架构对应的安装包，按 `SHA256SUMS` 校验后解压。在解压目录中，Linux/macOS 运行 `./releasefloor version`，Windows PowerShell 运行 `.\releasefloor.exe version`。需要在其他目录调用时，把该目录加入 PATH。也可使用 Go 安装：`go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0`。Windows 支持运行本工具，0.1 版不支持检查 PE 输入；预编译 macOS 命令记录的最低系统为 13.0。
+
+无需编译即可试用：从同一版本下载并解压 `releasefloor-examples.zip`，在示例目录中用工具的实际路径运行 `/path/to/releasefloor compare old.zip new.zip`。它应返回 1；`check --policy policy.json old.zip` 应通过，换成 `new.zip` 应阻断。`releasefloor-demo.html` 是已生成的离线示例报告。
+
+要从源码重新生成示例，先检出并进入仓库根目录：
+
+```sh
+git clone https://github.com/feiiiiii5/releasefloor.git
+cd releasefloor
+go run ./examples/generate --out output/demo
+go build -o releasefloor ./cmd/releasefloor
+./releasefloor compare --format html --output output/comparison.html output/demo/old.zip output/demo/new.zip
+```
+
+生成器只创建原创的格式元数据，不是可执行程序。候选包提高 GLIBC、GLIBCXX 和 macOS 最低版本，并丢失一个 arm64 slice，因此最后一条命令应返回 1。重复生成或导出时选择新路径。
+
 ## 构建并试用
 
-从源码检出构建，需要 Go 1.25 或更新版本。实现只使用 Go 标准库；构建后的工具运行时不需要 Go 或其他外部命令。
+在已检出的仓库根目录构建，需要 Go 1.25 或更新版本。实现只使用 Go 标准库；构建后的工具运行时不需要 Go 或其他外部命令。
 
 ```sh
 go build -o releasefloor ./cmd/releasefloor
@@ -67,6 +81,8 @@ go build -o releasefloor ./cmd/releasefloor
 
 比较按归档内的准确成员路径、平台和架构对应。删除原有二进制、提高或新引入数值版本要求及最低系统版本，以及覆盖不完整、必需元数据未知，都会阻止检查通过。新增二进制会列出，但不声称已与旧版比较其要求；新增直接依赖会提示审阅。
 
+Mach-O 同一动态库提供者的记录兼容版本提高，或弱依赖变为强依赖，也会阻断比较并要求复核；弱与强依赖分别比较。这不代表已证明实际 ABI 不兼容。
+
 归档内路径属于身份的一部分。如果两个版本分别使用 `app-1.0/bin/app` 和 `app-1.1/bin/app` 这样的外层目录，可明确指定去掉一层：
 
 ```sh
@@ -83,6 +99,8 @@ go build -o releasefloor ./cmd/releasefloor
 - 对不支持的可执行格式、嵌套归档、未知必需元数据和检查不完整显式报告。解析失败不会变成“没有问题”。
 - 拒绝损坏归档、重复身份、不安全成员路径和超过资源限制的输入。默认限制为输入 128 MiB、单成员 64 MiB、普通成员合计 256 MiB、4,096 个成员。
 - 保留产物与成员哈希、身份及元数据证据。哈希只能标识字节，不能证明来源真实。
+
+ELF 数值版本上限和漂移检查仅覆盖 GLIBC、GLIBCXX、CXXABI。其他版本节点保留为证据，不代表已检查其数值变化或完整 ABI。FAT64、无 section/扩展编号 ELF、压缩的运行元数据及不支持的机器格式会明确失败。
 
 动态加载、间接依赖、CPU 指令、内核要求和实际运行行为不在检查范围内。静态链接也不意味着能在所有系统运行。工具面向发布者自己的构建产物，采用有界解析，不提供恶意样本分析所需的隔离环境。
 
