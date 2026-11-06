@@ -34,3 +34,5 @@ Native CLI checks on a host establish that the scanner command runs there, not t
 HTML escaping and a no-network CSP are tested. A desktop browser preview was attempted but its transport was unavailable; visual layout was not independently inspected. Generated reports remain reproducible from the supplied examples.
 
 CI conclusions and release hashes are recorded with the final release evidence. Historical findings do not certify future formats, operating systems, artifacts or compatibility.
+
+The first CI run's Linux and Windows jobs passed; its `macos-14` job had no runner or steps and was cancelled with `The configuration 'macos-14-arm64-us-default' is not supported`. [GitHub retired those images on 2026-11-02](https://github.com/actions/runner-images/issues/13518). The workflow was corrected to `macos-26`; this cancellation is not counted as a passed macOS test.
