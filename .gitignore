@@ -1,0 +1,7 @@
+/dist/
+/.runtime/
+/output/
+*.test
+coverage.out
+/releasefloor
+/releasefloor.exe
