@@ -235,6 +235,12 @@ func inspectELF(data []byte) (Binary, error) {
 	var interpreter string
 	hasProgramDynamic := false
 	var programDynamicOff, programDynamicSize uint64
+	type elfSegment struct {
+		vaddr  uint64
+		off    uint64
+		filesz uint64
+	}
+	var loadSegments []elfSegment
 	if phnum > 0 {
 		if phoff < uint64(hsize) {
 			return b, fmt.Errorf("ELF program table overlaps header")
@@ -255,6 +261,15 @@ func inspectELF(data []byte) (Binary, error) {
 			body, err := region(data, off, size)
 			if err != nil {
 				return b, err
+			}
+			if pt == uint32(elf.PT_LOAD) {
+				var segVaddr, segFilesz uint64
+				if class == 2 {
+					segVaddr, segFilesz = bo.Uint64(p[16:24]), bo.Uint64(p[32:40])
+				} else {
+					segVaddr, segFilesz = uint64(bo.Uint32(p[8:12])), uint64(bo.Uint32(p[16:20]))
+				}
+				loadSegments = append(loadSegments, elfSegment{vaddr: segVaddr, off: off, filesz: segFilesz})
 			}
 			if pt == uint32(elf.PT_DYNAMIC) {
 				if hasProgramDynamic {
@@ -315,6 +330,42 @@ func inspectELF(data []byte) (Binary, error) {
 		}
 	}
 	sectionData := func(s *elfSection) []byte { return data[s.off : s.off+s.size] }
+	mapVAddr := func(vaddr, size uint64) (uint64, error) {
+		for _, seg := range loadSegments {
+			if vaddr >= seg.vaddr && vaddr <= seg.vaddr+seg.filesz {
+				if size > (seg.vaddr+seg.filesz)-vaddr {
+					return 0, fmt.Errorf("%w: ELF virtual address range %#x+%d exceeds PT_LOAD segment filesz", ErrUnsupported, vaddr, size)
+				}
+				return seg.off + (vaddr - seg.vaddr), nil
+			}
+		}
+		return 0, fmt.Errorf("%w: ELF virtual address %#x is not within any PT_LOAD segment", ErrUnsupported, vaddr)
+	}
+	checkSectionSegmentConsistency := func(s *elfSection) error {
+		if s == nil || s.addr == 0 || len(loadSegments) == 0 {
+			return nil
+		}
+		mappedOff, err := mapVAddr(s.addr, s.size)
+		if err != nil {
+			return err
+		}
+		if mappedOff != s.off {
+			return fmt.Errorf("%w: ELF section %#x file offset %d does not match PT_LOAD segment mapping %d", ErrUnsupported, s.typ, s.off, mappedOff)
+		}
+		return nil
+	}
+	if err := checkSectionSegmentConsistency(dynamic); err != nil {
+		return b, err
+	}
+	if err := checkSectionSegmentConsistency(needs); err != nil {
+		return b, err
+	}
+	if err := checkSectionSegmentConsistency(versym); err != nil {
+		return b, err
+	}
+	if err := checkSectionSegmentConsistency(dynsym); err != nil {
+		return b, err
+	}
 	// Offsets refer to the one loader string table. Cache strings so repeated
 	// names do not multiply allocations, and bound overlapping-name expansion.
 	stringCache := map[uint64]string{}
@@ -341,6 +392,9 @@ func inspectELF(data []byte) (Binary, error) {
 		x := &sections[s.link]
 		if x.flags&0x800 != 0 {
 			return nil, fmt.Errorf("%w: compressed runtime strings", ErrUnsupported)
+		}
+		if err := checkSectionSegmentConsistency(x); err != nil {
+			return nil, err
 		}
 		return sectionData(x), nil
 	}
@@ -784,6 +838,20 @@ func inspectMach(data []byte) (Binary, error) {
 			}
 			b.Libraries = append(b.Libraries, name)
 			b.Requirements = append(b.Requirements, Requirement{Provider: name, Version: packedVersion(bo.Uint32(c[20:24])), Weak: cmd == 0x80000018})
+		default:
+			if cmd&0x80000000 != 0 {
+				switch cmd {
+				case 0x8000001c, // LC_RPATH
+					0x80000022, // LC_DYLD_INFO_ONLY
+					0x80000028, // LC_MAIN
+					0x80000033, // LC_DYLD_EXPORTS_TRIE
+					0x80000034, // LC_DYLD_CHAINED_FIXUPS
+					0x80000035: // LC_FILESET_ENTRY
+					// Known benign mandatory commands
+				default:
+					b.Unknown = append(b.Unknown, fmt.Sprintf("unsupported mandatory Mach-O load command %#x", cmd))
+				}
+			}
 		}
 	}
 	if len(commands) != 0 {

@@ -1,0 +1,99 @@
+name: Preflight Release Gate
+
+# This workflow demonstrates how to run ReleaseFloor on the exact release artifacts
+# before they are published to GitHub Releases or any artifact repository.
+# It ensures you inspect the exact bits being distributed (never rebuild after gating).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  gate:
+    name: Verify Release Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 1. Build your cross-platform artifacts into dist/
+      # Replace this step with your actual build command (e.g. goreleaser,
+      # cargo-dist, maturin, cmake, etc.)
+      # -----------------------------------------------------------------
+      - name: Build Release Artifacts
+        run: |
+          mkdir -p dist
+          # Build your distribution packages here:
+          # goreleaser release --clean --snapshot
+          # cargo dist build
+          # python -m build
+
+      # -----------------------------------------------------------------
+      # 2. Download the PREVIOUS stable release for diffing
+      # -----------------------------------------------------------------
+      - name: Fetch Baseline Release
+        id: fetch_baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p baseline
+          # Fetch the latest prior tag assets (if available)
+          PREV_TAG=$(gh release list --limit 2 --json tagName -q '.[1].tagName' 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            echo "Comparing against previous tag: $PREV_TAG"
+            gh release download "$PREV_TAG" --dir baseline || true
+            echo "has_baseline=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No previous release found; will gate against policy ceiling only."
+            echo "has_baseline=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # -----------------------------------------------------------------
+      # 3. Install ReleaseFloor (or use prebuilt binary)
+      # -----------------------------------------------------------------
+      - name: Install ReleaseFloor
+        run: |
+          go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0
+
+      # -----------------------------------------------------------------
+      # 4. Gating Check A: Compare candidate against previous baseline
+      # -----------------------------------------------------------------
+      - name: Compare against Baseline Release
+        if: steps.fetch_baseline.outputs.has_baseline == 'true'
+        run: |
+          # Match candidate files with baseline files by naming pattern
+          for new_file in dist/*.tar.gz dist/*.zip dist/*.whl dist/*.jar; do
+            [ -e "$new_file" ] || continue
+            fname=$(basename "$new_file")
+            old_file="baseline/$fname"
+            if [ -f "$old_file" ]; then
+              echo "==> Comparing $old_file vs $new_file"
+              releasefloor compare "$old_file" "$new_file" --format text
+            fi
+          done
+
+      # -----------------------------------------------------------------
+      # 5. Gating Check B: Validate candidate artifacts against Policy Ceilings
+      # -----------------------------------------------------------------
+      - name: Enforce Policy Ceilings
+        run: |
+          if [ -f ".github/releasefloor-policy.json" ]; then
+            echo "==> Enforcing release floor policy ceilings"
+            releasefloor check --policy .github/releasefloor-policy.json dist/*
+          else
+            echo "No .github/releasefloor-policy.json found."
+            echo "Generate one using: releasefloor init-policy dist/* > .github/releasefloor-policy.json"
+          fi
+
+      # -----------------------------------------------------------------
+      # 6. Publish the EXACT verified artifacts (never rebuild!)
+      # -----------------------------------------------------------------
+      - name: Publish to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "All release floor gates passed. Publishing exact verified bytes..."
+          # gh release create "${{ github.ref_name }}" dist/* --title "Release ${{ github.ref_name }}"

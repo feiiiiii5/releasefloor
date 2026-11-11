@@ -94,7 +94,7 @@ func Scan(filename string, limits Limits) (inv Inventory, err error) {
 	s := artifactScanner{inv: &inv, limits: limits, paths: map[string]bool{}, originalPaths: map[string]bool{}, identities: map[string]bool{}}
 	lower := strings.ToLower(filename)
 	switch {
-	case scanZipMagic(data) || strings.HasSuffix(lower, ".zip"):
+	case scanZipMagic(data) || strings.HasSuffix(lower, ".zip") || strings.HasSuffix(lower, ".whl") || strings.HasSuffix(lower, ".jar"):
 		err = s.zip(data)
 	case bytes.HasPrefix(data, []byte{0x1f, 0x8b}) || strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
 		err = s.tarGzip(data)

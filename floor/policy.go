@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
@@ -148,3 +149,93 @@ func ValidatePolicy(p Policy) error {
 	}
 	return nil
 }
+
+// DerivePolicy synthesizes a canonical Policy matrix from inspected baseline inventories.
+func DerivePolicy(inventories []Inventory) (Policy, error) {
+	if len(inventories) == 0 {
+		return Policy{}, fmt.Errorf("at least one inventory is required")
+	}
+	type target struct {
+		platform  string
+		arch      string
+		maxFloors map[string]string
+		maxOS     string
+	}
+	targets := map[string]*target{}
+
+	for _, inv := range inventories {
+		if !inv.Complete {
+			return Policy{}, fmt.Errorf("cannot derive policy from incomplete inventory %q", inv.Artifact)
+		}
+		if len(inv.Binaries) == 0 {
+			return Policy{}, fmt.Errorf("inventory %q has no runtime binaries", inv.Artifact)
+		}
+		for _, b := range inv.Binaries {
+			key := b.Platform + "/" + b.Arch
+			tgt, exists := targets[key]
+			if !exists {
+				tgt = &target{
+					platform:  b.Platform,
+					arch:      b.Arch,
+					maxFloors: map[string]string{},
+				}
+				targets[key] = tgt
+			}
+			if b.Platform == "elf" {
+				for family, v := range b.Floors {
+					current, ok := tgt.maxFloors[family]
+					if !ok || numericLess(current, v) {
+						tgt.maxFloors[family] = v
+					}
+				}
+			} else if b.Platform == "macos" {
+				if b.MinimumOS != "" {
+					if tgt.maxOS == "" {
+						tgt.maxOS = b.MinimumOS
+					} else {
+						cmp, err := compareVersion(b.MinimumOS, tgt.maxOS)
+						if err == nil && cmp > 0 {
+							tgt.maxOS = b.MinimumOS
+						}
+					}
+				}
+			}
+		}
+	}
+
+	keys := make([]string, 0, len(targets))
+	for k := range targets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	rules := make([]Rule, 0, len(keys))
+	for _, k := range keys {
+		tgt := targets[k]
+		if tgt.platform != "elf" && tgt.platform != "macos" {
+			continue
+		}
+		r := Rule{
+			Platform:  tgt.platform,
+			Arch:      tgt.arch,
+			MaxFloors: tgt.maxFloors,
+			MaxOS:     tgt.maxOS,
+		}
+		if tgt.platform == "elf" && len(r.MaxFloors) == 0 {
+			// A static binary without recorded glibc imports satisfies any ceiling.
+			// Provide standard conservative baseline 2.17 so unexpected dynamic linkage is caught.
+			r.MaxFloors = map[string]string{"GLIBC": "2.17"}
+		}
+		if tgt.platform == "macos" && r.MaxOS == "" {
+			return Policy{}, fmt.Errorf("macos target %q is missing a recorded minimum OS", k)
+		}
+		rules = append(rules, r)
+	}
+
+	p := Policy{
+		Schema: PolicySchema,
+		Rules:  rules,
+	}
+	return p, ValidatePolicy(p)
+}
+

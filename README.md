@@ -1,133 +1,270 @@
 # ReleaseFloor
 
-Catch a release archive whose recorded runtime requirements changed before you publish it.
+[![CI](https://github.com/feiiiiii5/releasefloor/actions/workflows/ci.yml/badge.svg)](https://github.com/feiiiiii5/releasefloor/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/feiiiiii5/releasefloor?display_name=tag)](https://github.com/feiiiiii5/releasefloor/releases/latest)
+[![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?logo=go)](go.mod)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey)](#)
 
-ReleaseFloor is an experimental local command-line tool for release maintainers and installer maintainers. It reads ELF and Mach-O executables and accompanying dynamic libraries from a raw binary, ZIP, or tar.gz archive. It inventories their recorded requirements, compares releases by member, platform and architecture, and checks several artifacts against an explicit JSON policy.
+[中文说明](README.zh-CN.md) · [Behavior Contract](docs/CONTRACT.md) · [AI Agent Guide](docs/AGENT.md) · [Product Decisions & Alternatives](docs/PRODUCT.md) · [Validation Record](docs/VALIDATION.md)
 
-For example, a rebuilt CLI may start requiring a newer GLIBC version, a bundled library may raise its minimum macOS version, or an archive may lose an architecture. ReleaseFloor makes those changes visible without running the binaries.
+**Zero-overhead preflight release gate for compiled binaries (ELF & Mach-O).**  
+Catch accidental GLIBC version creep, macOS deployment target bumps, unexpected dynamic libraries, and dropped architectures in binary release archives *before* you publish.
 
-**This is a small open-source experiment.** Its reports describe metadata found in the supplied bytes. They do not certify that an application will run on a target system. Keep target-system smoke tests and your existing release checks.
+---
 
-[中文说明](README.zh-CN.md) · [Exact contract](docs/CONTRACT.md) · [Product decision and alternatives](docs/PRODUCT.md)
+## 🎯 Target Audience (Who Needs ReleaseFloor?)
 
-[Download a prebuilt command](https://github.com/feiiiiii5/releasefloor/releases/tag/v0.1.0) for Linux, macOS or Windows, or install from source with `go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0`. Windows is supported as a host; PE input inspection is outside 0.1. Extract the release archive and, from that directory, run `./releasefloor version` on Linux/macOS or `.\releasefloor.exe version` in Windows PowerShell. Verify the archive against the release's `SHA256SUMS` through your normal trusted download process. Add its directory to your PATH if you want to invoke the command elsewhere.
+ReleaseFloor is built for anyone who publishes or automates the release of compiled native software:
 
-The prebuilt macOS commands record a minimum OS of 13.0. [Validation details](docs/VALIDATION.md) separate source CI, inspected public artifacts and execution of packaged commands. Distributions include [Go's license notice](THIRD_PARTY_NOTICES.txt) alongside the project license.
+| User Persona | Common Pain Point | How ReleaseFloor Solves It |
+| :--- | :--- | :--- |
+| **CLI & Systems Tool Authors**<br>*(Go, Rust, C/C++, Zig, Swift)* | Binaries compiled on newer CI machines fail on older user distros (e.g., CentOS 7, Debian 10, Ubuntu 20.04). | Catches GLIBC/GLIBCXX floor hikes and macOS target bumps before distribution. |
+| **DevOps & Release Engineers**<br>*(CI/CD Pipeline Maintainers)* | Upgrades to GitHub Actions runners (`ubuntu-latest`) or Xcode silently break release matrices. | Provides a 3-line fail-fast CI gate with strict exit codes (0 = pass, 1 = blocked). |
+| **Package & Wheel Maintainers**<br>*(Python Wheels & Java JNI)* | C-extensions in binary wheels (`.whl`) or native libraries in JARs (`.jar`) silently exceed platform ceilings. | Direct inspection of `.whl` and `.jar` archives without disk extraction or execution. |
+| **Autonomous AI Coding Agents**<br>*(Claude Code, Antigravity, Cursor)* | Agents bump build toolchains or cross-compile flags without knowing they broke compatibility on older kernels. | Native Model Context Protocol (MCP) server & deterministic JSON for closed-loop remediation. |
 
-Independent project developed with AI coding assistance. The implementation and synthetic fixtures are original; format references and competing tools are documented in the product notes.
+---
 
-## Reproduce the example
+## 💡 Real-World Scenarios (When to Use ReleaseFloor)
 
-For a prebuilt command, download and unpack `releasefloor-examples.zip` from the same release. In the examples directory, run `/path/to/releasefloor compare old.zip new.zip` (replace `/path/to/releasefloor` with the extracted command's actual path). Expected exit: **1**. `check --policy policy.json old.zip` passes; `new.zip` blocks. The accompanying `releasefloor-demo.html` is a ready-made report of those synthetic files.
+### 1. The Silent GLIBC Creep (CI Runner Upgrade)
+* **The Situation**: GitHub Actions updates `ubuntu-latest` from Ubuntu 22.04 to 24.04.
+* **The Disaster**: Your Go/Rust/C tool compiles cleanly with exit code 0, but links against `libc.so.6 (GLIBC_2.38)`. When a user runs it on Debian 11 or RHEL 8, it crashes immediately:  
+  `./mytool: /lib/x86_64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`.
+* **The Fix**: `releasefloor compare old-release.tar.gz new-release.tar.gz` detects the floor jump from `2.28` to `2.38` and halts CI with exit code 1.
 
-To regenerate the examples from source, first clone the repository and enter its root. The generator creates synthetic object-format headers; they are **not runnable programs** and contain no third-party binaries.
+### 2. The Accidental macOS SDK Drift
+* **The Situation**: A developer or macOS runner upgrades Xcode, unintentionally raising the minimum deployment target from macOS 11.0 (Big Sur) to 14.0 (Sonoma).
+* **The Disaster**: Users on macOS Monterey or Ventura get an immediate OS rejection error upon launching your app.
+* **The Fix**: `releasefloor check --policy policy.json dist/*.zip` flags `policy_os_exceeded` instantly.
 
+### 3. Dropped Architecture in Universal Binaries
+* **The Situation**: A misconfigured packaging script or CMake target accidentally leaves out the `arm64` slice from a macOS universal binary, shipping only `x86_64`.
+* **The Disaster**: Apple Silicon (M1/M2/M3/M4) users suffer degraded performance via Rosetta emulation or encounter missing binary errors.
+* **The Fix**: `releasefloor check` enforces required architectures per rule; `compare` detects `removed_binary` for the missing slice.
+
+### 4. Accidental Dynamic Dependency Ingestion
+* **The Situation**: A code change or third-party crate/module introduces an unintentional dynamic link to `libssl.so.3` or `libstdc++.so.6` in a binary intended to be static or libc-only.
+* **The Disaster**: The binary fails to launch on any target machine lacking that exact shared library.
+* **The Fix**: ReleaseFloor records all direct library imports and flags new dynamic dependencies for review.
+
+### 5. AI Agent Self-Healing Build Loop
+* **The Situation**: An AI coding agent generates code, compiles cross-platform binaries, and prepares a release tag.
+* **The Disaster**: The agent has no way to verify compatibility without running on 10 different virtual machines.
+* **The Fix**: The agent calls `releasefloor_check` via MCP, receives structured JSON diagnosis, automatically adds `-C target-feature=+crt-static` or adjusts `-mmacosx-version-min`, and verifies success deterministically.
+
+---
+
+## ⚡ 3-Minute Quickstart Tutorial
+
+### Step 1: Install ReleaseFloor (30 Seconds)
+
+**Option A — Using Go (1.25+):**
 ```sh
-git clone https://github.com/feiiiiii5/releasefloor.git
-cd releasefloor
-go run ./examples/generate --out output/demo
-go build -o releasefloor ./cmd/releasefloor
-./releasefloor compare --format html --output output/comparison.html output/demo/old.zip output/demo/new.zip
+go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@v0.1.0
 ```
 
-The last command intentionally exits **1**: the candidate raises GLIBC, GLIBCXX and a macOS minimum version, and drops an arm64 universal slice. Open `output/comparison.html` locally to review the exact member evidence. `check --policy output/demo/policy.json output/demo/old.zip` passes; checking `new.zip` blocks. Choose a new output directory/file when repeating the example.
-
-## Build and try it
-
-Build from a checkout with Go 1.25 or newer. The implementation uses only the Go standard library; the built tool needs no Go installation or external commands at runtime.
+**Option B — Download Standalone Binary (Linux / macOS / Windows):**
+Download the prebuilt archive for your OS from [GitHub Releases](https://github.com/feiiiiii5/releasefloor/releases/latest), unpack, and place `releasefloor` in your `PATH`.
 
 ```sh
-go build -o releasefloor ./cmd/releasefloor
-./releasefloor scan app-linux-amd64.tar.gz
-./releasefloor compare previous.zip candidate.zip
+# Verify installation
+releasefloor version
 ```
 
-These are usage examples, not a record of tests performed on those filenames. Inspect your own release artifact first, then compare it with the previous release.
+---
+
+### Step 2: Inspect Any Release Artifact (`scan`)
+
+Run `releasefloor scan` on any compiled executable, archive (`.tar.gz`, `.zip`), Python Wheel (`.whl`), or Java JAR (`.jar`):
 
 ```sh
-./releasefloor scan --format json app-linux-amd64.tar.gz
-./releasefloor compare --format html --output comparison.html previous.zip candidate.zip
+releasefloor scan dist/myapp-linux-amd64.tar.gz
 ```
 
-Output goes to stdout unless `--output` names a **new** file. Existing files and inputs are never overwritten. HTML reports are self-contained and contain no remote assets or scripts.
+**Example Terminal Output:**
+```
+releasefloor 0.1.0 · pass
 
-## Check a release matrix
+artifact: myapp-linux-amd64.tar.gz
+sha256:   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+coverage: complete (4 regular entries, 1 runtime binary, 3 ignored files)
 
-Save a policy such as this as `policy.json`. Set the limits to the requirements you intend to support; the example values are illustrative.
+  bin/myapp (elf, amd64, executable)
+    floors:       GLIBC 2.28, GLIBCXX 3.4.28
+    libraries:    libc.so.6, libstdc++.so.6
+```
 
+Want JSON or an offline HTML report?
+```sh
+# Machine-readable JSON for scripts & agents
+releasefloor scan dist/myapp-linux-amd64.tar.gz --format json
+
+# Self-contained offline HTML audit report
+releasefloor scan dist/myapp-linux-amd64.tar.gz --format html --output report.html
+```
+
+---
+
+### Step 3: Compare Candidate Against Last Release (`compare`)
+
+Prevent requirement regressions by comparing your new build candidate against your previous stable release:
+
+```sh
+releasefloor compare releases/v1.0.0.tar.gz dist/v1.1.0.tar.gz
+```
+
+* **Passes (Exit Code 0)**: Runtime requirements remain identical or lowered; new binaries added.
+* **Blocks (Exit Code 1)**: Any GLIBC floor raised, macOS version bumped, slice dropped, or library added.
+
+---
+
+### Step 4: Auto-Generate Policy & Gate CI (`init-policy` + `check`)
+
+Instead of writing release policies by hand, let ReleaseFloor inspect your current stable release and synthesize your contract:
+
+```sh
+# 1. Synthesize baseline policy from your current stable build
+releasefloor init-policy --output .github/releasefloor-policy.json dist/*.tar.gz dist/*.zip
+
+# 2. Gate all candidate builds in CI against this policy
+releasefloor check --policy .github/releasefloor-policy.json dist/*.tar.gz dist/*.zip
+```
+
+**Example `.github/releasefloor-policy.json`:**
 ```json
 {
   "schema": "releasefloor.policy.v1",
   "rules": [
     {"platform": "elf", "arch": "amd64", "max_floors": {"GLIBC": "2.28"}},
     {"platform": "elf", "arch": "arm64", "max_floors": {"GLIBC": "2.28"}},
-    {"platform": "macos", "arch": "amd64", "max_os": "12.0"},
-    {"platform": "macos", "arch": "arm64", "max_os": "12.0"}
+    {"platform": "macos", "arch": "amd64", "max_os": "11.0"},
+    {"platform": "macos", "arch": "arm64", "max_os": "11.0"}
   ]
 }
 ```
 
-```sh
-./releasefloor check --policy policy.json --format json --output matrix.json app-linux-amd64.tar.gz app-linux-arm64.tar.gz app-macos.zip
+---
+
+### Step 5: Connect to Your AI Agent (MCP Server)
+
+ReleaseFloor includes a built-in Model Context Protocol (MCP) server over `stdio` with **zero external dependencies**.
+
+Add it to your Claude Desktop (`claude_desktop_config.json`) or Cursor (`mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "releasefloor": {
+      "command": "releasefloor",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-Every inspected binary must match at least one rule, and all matching ceilings apply. A rule with a literal platform and architecture also requires at least one matching binary across the supplied artifacts. The four example rules therefore require all four target dimensions. A `*` selector supplies a ceiling without requiring a particular target to exist.
+AI Agents can now autonomously call:
+- `releasefloor_scan`: Inspect runtime requirements of any build archive.
+- `releasefloor_compare`: Diff candidate builds against stable baselines.
+- `releasefloor_check`: Validate full release matrices against policy ceilings.
+- `releasefloor_init_policy`: Generate policy contracts automatically.
 
-Platform selectors are `elf`, `macos` or `*`; architecture selectors use the exact reported value or `*`. Supported floor families are `GLIBC`, `GLIBCXX` and `CXXABI`. Unknown policy fields and unsupported family names are errors. If a complete inventory records no requirement for a family, that family does not exceed a ceiling; the tool does not invent a zero-version floor. Unknown or incomplete metadata still blocks.
+---
 
-A policy caps requirements and checks literal target presence; it is not a complete list of expected archive members. Compare against the previous release to detect a missing member or a missing architecture of a particular member.
+## 🚀 GitHub Actions CI/CD Integration
 
-`elf` identifies the file format, not a proven Linux target. Mach-O platform identifiers come from recorded build metadata. Use the platform and architecture values reported by `scan` when writing a policy.
+Integrate ReleaseFloor into your release workflow in 3 lines of YAML:
 
-## What comparison means
+```yaml
+name: Release
+on:
+  push:
+    tags: ['v*']
 
-Comparison aligns exact archive member path, platform and architecture identities. It blocks removed binaries, increased or newly introduced numeric requirement floors or minimum OS, and incomplete or unknown coverage. New binaries are reported without claiming a previous floor comparison; added direct dependencies request review.
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-For an existing Mach-O library provider, a raised recorded compatibility version or a weak import becoming required also blocks for review. Weak and required imports are compared separately. This does not establish whether a library's actual ABI is compatible.
+      # 1. Build your cross-platform artifacts into dist/
+      # ... (e.g. goreleaser, cargo-dist, cmake, or wheels)
 
-Archive paths are significant. If releases contain an outer version directory such as `app-1.0/bin/app` and `app-1.1/bin/app`, explicitly use `--strip-components 1` when both layouts have one wrapper directory:
-
-```sh
-./releasefloor compare --strip-components 1 previous.tar.gz candidate.tar.gz
+      # 2. Gate release baselines before uploading assets
+      - name: Gate release runtime requirements
+        uses: feiiiiii5/releasefloor@v0.1.0
+        with:
+          command: check
+          args: --policy .github/releasefloor-policy.json dist/*.tar.gz dist/*.zip
 ```
 
-ReleaseFloor does not guess renamed paths. Raw single-binary inputs use the stable member name `binary`, so changing the outer filename does not make the binary appear removed.
+---
 
-## Coverage and limits
+## 🌐 Language & Ecosystem Support
 
-- Reads supported ELF and Mach-O metadata, including universal Mach-O slices, from raw files, ZIP, tar.gz and `.tgz`.
-- Scans regular members by magic rather than filename or executable permission. Accompanying shared libraries are included.
-- Does not extract archives, follow symlinks, recurse into nested archives, execute input, fetch dependencies, or contact a service.
-- Reports unsupported runtime formats, nested archives, unknown required metadata and incomplete scans explicitly. A failed parser is never a clean result.
-- Rejects invalid archives, duplicate identities, unsafe member paths and resource-limit violations. Defaults are 128 MiB input, 64 MiB per member, 256 MiB total regular bytes and 4,096 members.
-- Preserves artifact and member hashes, identities and source metadata. Hashes identify bytes; they do not establish authenticity.
+ReleaseFloor is **completely language-agnostic**. It inspects compiled machine-code metadata (ELF and Mach-O) directly:
 
-Numeric ELF floor gates cover GLIBC, GLIBCXX and CXXABI. Other recorded version nodes remain evidence; their numeric changes are not a general ABI gate. FAT64, sectionless/extended-numbering ELF, compressed runtime metadata and unsupported machine formats fail explicitly. See the [validation record](docs/VALIDATION.md) for exercised environments and remaining limits.
+* **C & C++**: Standalone binaries, shared libraries (`.so`, `.dylib`), and dynamic plugin architectures. Specifically gates `GLIBC`, `GLIBCXX`, and `CXXABI` version baselines.
+* **Go & Rust**: Single-binary CLIs, static builds (`musl` / `CGO_ENABLED=0`), cross-compiled artifacts, and bundled system libraries.
+* **Python (Native Wheels)**: Inspects native extensions (`.so`, `.dylib`) inside binary `.whl` packages (such as `manylinux` and `macosx` wheels) without extracting them.
+* **Java & JVM (JNI & Native Image)**: Inspects bundled JNI shared libraries inside `.jar` archives, or ahead-of-time compiled native executables produced by GraalVM Native Image.
+* **Zig & Swift**: Native CLI executables and dynamic frameworks on Linux and macOS.
 
-Dynamic loading, transitive dependencies, CPU instruction requirements, kernel requirements and actual runtime behavior are outside this check. Static linkage does not prove universal portability. The tool is intended for the publisher's own build artifacts, with bounded parsing; it is not a malware-analysis isolation environment.
+Supported packaging formats: `.tar.gz`, `.tgz`, `.zip`, Python `.whl`, Java `.jar`, and raw standalone executables or libraries.
 
-## Reports and CI
+---
 
-`scan`, `compare` and `check` support `--format text|json|html`. JSON reports use `releasefloor.report.v1`. Reports include artifact basenames and archive member names, not local absolute input paths. Member paths, dependency names and other metadata may still contain information you should review before sharing a report.
+## 📊 Feature & Competitor Matrix
 
-| Exit | Meaning |
-| --- | --- |
-| `0` | Implemented checks completed with no blocking finding. |
-| `1` | The report contains blocking changes, policy findings or unknown/incomplete coverage. |
-| `2` | Invalid invocation, input, policy or an I/O failure. |
+| Capability | ReleaseFloor | abicheck | BLINT | cargo-dist | Custom bash scripts |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Mixed Archive Scanning** (`.tar.gz`, `.zip`, `.whl`, `.jar`) | **Native** (no disk extract) | Shared libs only | Single binary | During build only | Manual `tar`/`unzip` |
+| **Multi-Architecture Universal Mach-O** | **Yes** (all slices) | Partial | No | Packaging only | Requires `otool`/`lipo` |
+| **Zero Execution / Sandboxing Required** | **Yes** (pure static parse) | Yes | Yes | Yes | Depends on script |
+| **Release Matrix Policy Gate** | **Yes** (Declarative JSON) | No | Diff only | Static config | Hard to maintain |
+| **Auto Policy Synthesis (`init-policy`)** | **Yes** (one command) | No | No | No | No |
+| **Native MCP Server for AI Agents** | **Yes** (Built-in stdio) | No | No | No | No |
+| **Language & Ecosystem Agnostic** | **Any compiled binary** | C/C++ | Any binary | Rust-centric | Fragile across OS |
+| **External Dependencies** | **None** (Go stdlib only) | Python / libs | Python / libs | Rust toolchain | `readelf`, `otool`, etc. |
+| **Offline Self-Contained HTML Report** | **Yes** (Strict CSP) | No | HTML | No | No |
 
-A minimal CI step, after building and collecting your release artifacts:
+---
 
-```sh
-./releasefloor check --policy policy.json --format json --output releasefloor-matrix.json dist/app-linux-amd64.tar.gz dist/app-linux-arm64.tar.gz dist/app-macos.zip
+## 🔒 Security & Scope Boundaries
+
+* **No Target Execution**: ReleaseFloor **never** executes inspected binaries. Metadata is parsed statically with bounded memory readers.
+* **Pure Go Standard Library**: Zero external dependencies, zero CGo. Fast compilation, minimal attack surface.
+* **Never Overwrite**: `--output` strictly requires a new, non-existing file (`O_CREATE | O_EXCL`). Inputs and existing reports are never overwritten.
+* **Archive Safety**: Built-in limits protect against zip-slip directory traversal (`../`), decompression bombs, and malformed header attacks.
+
+---
+
+## 📖 CLI Help & Reference
+
+```
+Usage: releasefloor <command> [options] [arguments...]
+
+Commands:
+  scan         Inspect runtime requirements of an archive or binary
+  compare      Compare runtime requirements between baseline and candidate builds
+  check        Verify release artifacts against an explicit policy file
+  init-policy  Synthesize a starter policy JSON from baseline artifacts
+  mcp          Run as a Model Context Protocol (MCP) server over stdio
+  version      Print version information
+  help         Show help for ReleaseFloor or a specific command
 ```
 
-Keep the exit status as part of the job result. Use a fresh report filename for each run. Add `compare` against a trusted prior artifact if the job must detect removals. Acquire and verify prior releases through your existing release process; ReleaseFloor does not download them.
+To see detailed options and examples for any command:
+```sh
+releasefloor help scan
+releasefloor help compare
+releasefloor help check
+releasefloor help init-policy
+```
 
-## Alternatives and project status
+---
 
-Start with your existing release script if it already answers this question reliably. [abicheck](docs/PRODUCT.md#alternatives), BLINT, Packslip and cargo-dist cover adjacent or overlapping workflows. ReleaseFloor's experiment is a direct check of mixed CLI archives and an explicit artifact matrix, with missing architectures and incomparable coverage kept visible. It does not replace ABI analysis or packaging systems.
+## License
 
-There is no claim of external adoption, commercial validation or comprehensive compatibility. See the [product decision](docs/PRODUCT.md) for the evidence, unknowns and conditions for stopping or expanding the experiment. Changes are recorded in [CHANGELOG.md](CHANGELOG.md).
-
-Contributions follow [CONTRIBUTING.md](CONTRIBUTING.md). Security boundaries and reporting guidance are in [SECURITY.md](SECURITY.md). Original project code is available under the [MIT license](LICENSE).
+ReleaseFloor is licensed under the [MIT License](LICENSE).

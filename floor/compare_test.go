@@ -94,6 +94,60 @@ func TestPolicyMatrixTargetsCeilingsAndStatic(t *testing.T) {
 	}
 }
 
+func TestDerivePolicy(t *testing.T) {
+	elf1 := elfBinary("bin/tool", "amd64", "2.28")
+	elf1.Floors["GLIBCXX"] = "3.4.28"
+	elf2 := elfBinary("lib/plugin.so", "amd64", "2.31")
+	machoArm := Binary{Member: "bin/mac", Format: "macho", Platform: "macos", Arch: "arm64", MinimumOS: "12.0.0", Floors: map[string]string{}}
+	machoX86 := Binary{Member: "bin/mac", Format: "macho", Platform: "macos", Arch: "amd64", MinimumOS: "11.0.0", Floors: map[string]string{}}
+	staticElf := elfBinary("bin/static", "arm64", "")
+
+	inventories := []Inventory{
+		inv(elf1, elf2),
+		inv(machoArm, machoX86, staticElf),
+	}
+
+	p, err := DerivePolicy(inventories)
+	if err != nil {
+		t.Fatalf("DerivePolicy failed: %v", err)
+	}
+	if p.Schema != PolicySchema || len(p.Rules) != 4 {
+		t.Fatalf("unexpected derived policy: %+v", p)
+	}
+
+	// Verify amd64 ELF got the highest GLIBC floor (2.31) and GLIBCXX (3.4.28)
+	foundElfAmd64 := false
+	foundStaticArm64 := false
+	for _, rule := range p.Rules {
+		if rule.Platform == "elf" && rule.Arch == "amd64" {
+			foundElfAmd64 = true
+			if rule.MaxFloors["GLIBC"] != "2.31" || rule.MaxFloors["GLIBCXX"] != "3.4.28" {
+				t.Fatalf("incorrect ELF amd64 ceilings: %+v", rule.MaxFloors)
+			}
+		}
+		if rule.Platform == "elf" && rule.Arch == "arm64" {
+			foundStaticArm64 = true
+			if rule.MaxFloors["GLIBC"] != "2.17" {
+				t.Fatalf("static binary did not get conservative fallback ceiling: %+v", rule.MaxFloors)
+			}
+		}
+		if rule.Platform == "macos" && rule.Arch == "arm64" {
+			if rule.MaxOS != "12.0.0" {
+				t.Fatalf("incorrect macOS arm64 ceiling: %s", rule.MaxOS)
+			}
+		}
+	}
+	if !foundElfAmd64 || !foundStaticArm64 {
+		t.Fatal("missing expected rules in derived policy")
+	}
+
+	// The derived policy must pass against the baseline inventories themselves!
+	report, err := Check(inventories, p)
+	if err != nil || report.Status != "pass" {
+		t.Fatalf("baseline failed its own derived policy: %v, %+v", err, report)
+	}
+}
+
 func TestMacOSCeilingAndSDKNotRuntime(t *testing.T) {
 	b := Binary{Member: "bin/tool", Format: "macho", Platform: "macos", Arch: "arm64", MinimumOS: "12.0.0", SDK: "26.0.0", Floors: map[string]string{}}
 	p := Policy{Schema: PolicySchema, Rules: []Rule{{Platform: "macos", Arch: "arm64", MaxOS: "12"}}}

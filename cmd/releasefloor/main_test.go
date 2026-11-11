@@ -104,8 +104,126 @@ func TestInvocationAndPolicyErrors(t *testing.T) {
 			t.Fatalf("%v => %d", args, got)
 		}
 	}
+	for _, versionArg := range []string{"version", "--version", "-v"} {
+		var out, err bytes.Buffer
+		if run([]string{versionArg}, &out, &err) != 0 || strings.TrimSpace(out.String()) != floor.Version {
+			t.Fatalf("%s output incorrect", versionArg)
+		}
+	}
+}
+
+func TestFlagOrderingAndInterleaving(t *testing.T) {
+	dir := t.TempDir()
+	old := filepath.Join(dir, "old")
+	current := filepath.Join(dir, "new")
+	if err := os.WriteFile(old, machoFixture(12), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(current, machoFixture(14), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	// Test flags after positional arguments: scan ARTIFACT --format json
+	if rc := run([]string{"scan", old, "--format", "json"}, &out, &errOut); rc != 0 {
+		t.Fatalf("scan with flag at end failed (%d): %s", rc, errOut.String())
+	}
+	var r floor.Report
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if r.Status != "pass" || len(r.Inventories) != 1 {
+		t.Fatalf("unexpected scan report: %+v", r)
+	}
+	// Test compare with flags at end: compare OLD NEW --format json
+	out.Reset()
+	errOut.Reset()
+	if rc := run([]string{"compare", old, current, "--format", "json"}, &out, &errOut); rc != 1 {
+		t.Fatalf("compare with flag at end failed (%d): %s", rc, errOut.String())
+	}
+	// Test double-dash separator
+	out.Reset()
+	errOut.Reset()
+	if rc := run([]string{"scan", "--format", "json", "--", old}, &out, &errOut); rc != 0 {
+		t.Fatalf("scan with -- separator failed (%d): %s", rc, errOut.String())
+	}
+}
+
+func TestCLIInitPolicyAndMCP(t *testing.T) {
+	dir := t.TempDir()
+	app := filepath.Join(dir, "app")
+	if err := os.WriteFile(app, machoFixture(12), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Test init-policy to stdout
+	var out, errOut bytes.Buffer
+	rc := run([]string{"init-policy", app}, &out, &errOut)
+	if rc != 0 {
+		t.Fatalf("init-policy failed (%d): %s", rc, errOut.String())
+	}
+	var p floor.Policy
+	if err := json.Unmarshal(out.Bytes(), &p); err != nil || len(p.Rules) != 1 {
+		t.Fatalf("invalid generated policy: %v, %+v", err, p)
+	}
+
+	// 2. Test init-policy with --output
+	policyOut := filepath.Join(dir, "policy.json")
+	out.Reset()
+	errOut.Reset()
+	rc = run([]string{"init-policy", "--output", policyOut, app}, &out, &errOut)
+	if rc != 0 {
+		t.Fatalf("init-policy --output failed (%d): %s", rc, errOut.String())
+	}
+	fileBytes, err := os.ReadFile(policyOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pFromFile floor.Policy
+	if err := json.Unmarshal(fileBytes, &pFromFile); err != nil || len(pFromFile.Rules) != 1 {
+		t.Fatalf("invalid policy file: %v, %+v", err, pFromFile)
+	}
+
+	// 3. Test mcp subcommand via runWithStdin
+	var mcpIn, mcpOut, mcpErr bytes.Buffer
+	mcpIn.WriteString(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}` + "\n")
+	rc = runWithStdin(&mcpIn, []string{"mcp"}, &mcpOut, &mcpErr)
+	if rc != 0 {
+		t.Fatalf("mcp command failed (%d): %s", rc, mcpErr.String())
+	}
+	if !bytes.Contains(mcpOut.Bytes(), []byte(`"protocolVersion":"2024-11-05"`)) {
+		t.Fatalf("mcp command output invalid: %s", mcpOut.String())
+	}
+}
+
+func TestSubcommandHelp(t *testing.T) {
+	// General help
+	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}} {
+		var out, err bytes.Buffer
+		rc := run(args, &out, &err)
+		if rc != 0 || !strings.Contains(out.String(), "releasefloor <command>") {
+			t.Fatalf("%v => %d, out: %s", args, rc, out.String())
+		}
+	}
+	// Subcommand specific help via 'help <cmd>'
+	for _, cmd := range []string{"scan", "compare", "check", "init-policy", "mcp", "version"} {
+		var out, err bytes.Buffer
+		rc := run([]string{"help", cmd}, &out, &err)
+		if rc != 0 || !strings.Contains(out.String(), "Usage: releasefloor "+cmd) {
+			t.Fatalf("help %s => %d, out: %s", cmd, rc, out.String())
+		}
+	}
+	// Subcommand specific help via '<cmd> --help'
+	for _, cmd := range []string{"scan", "compare", "check", "init-policy"} {
+		var out, err bytes.Buffer
+		rc := run([]string{cmd, "--help"}, &out, &err)
+		if rc != 0 || !strings.Contains(out.String(), "Usage: releasefloor "+cmd) {
+			t.Fatalf("%s --help => %d, out: %s", cmd, rc, out.String())
+		}
+	}
+	// Unknown command for help returns 2
 	var out, err bytes.Buffer
-	if run([]string{"--version"}, &out, &err) != 0 || strings.TrimSpace(out.String()) != floor.Version {
-		t.Fatal("version output incorrect")
+	rc := run([]string{"help", "nonexistent"}, &out, &err)
+	if rc != 2 || !strings.Contains(err.String(), "unknown command") {
+		t.Fatalf("help nonexistent => %d, err: %s", rc, err.String())
 	}
 }

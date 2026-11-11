@@ -54,3 +54,37 @@ The [experimental v0.1.0 release](https://github.com/feiiiiii5/releasefloor/rele
 The initial local multi-asset upload timed out and left an incomplete unpublished draft. It was not counted as delivery. The successful manual workflow rebuilt and reconciled those draft assets before publication. This explains why the final public manifest identifies the Linux CI build rather than the earlier local packaging attempt.
 
 Subsequent documentation-only commits clarify installation, record these results and require external maintainer evidence before expanding investment. They do not move the published tag or change its binaries. There are still no verified external users, paid demand or target-program compatibility results.
+
+## Real-World Failure Case Studies & Edge-Case Regression Fixes
+
+### 1. Edge-Case Regression Fixes (Preventing False Passes)
+
+An independent code review and fuzzing inspection identified two critical edge-case boundaries where tampered or non-standard inputs could previously produce a false pass:
+
+1. **ELF PT_LOAD Segment vs. Section Header Consistency**:
+   - *Vulnerability*: Previously, `inspectELF` verified that dynamic symbol tags (`DT_STRTAB`, `DT_VERNEED`, `DT_VERSYM`) matched the virtual address (`sh_addr`) in their respective section headers, but did not cross-reference that virtual address against the file offsets defined in the loader's `PT_LOAD` program headers. A modified binary with tampered section file offsets (`sh_offset`) could cause the scanner to read decoupled string tables while the real system dynamic linker mapped the unmodified segment, leading to false passes against ceilings.
+   - *Fix*: `inspectELF` now records all `PT_LOAD` segments, maps each metadata section's `sh_addr` through the segment table, and strictly asserts `mappedOffset == sh_offset`. Any discrepancy immediately returns `ErrUnsupported`, rendering inventory coverage incomplete and blocking the gate.
+   - *Regression Test*: Added `TestELFSectionSegmentConsistencyAndMachOMandatoryCommands` in `floor/inspect_test.go`.
+
+2. **Mach-O Mandatory Load Commands (`LC_REQ_DYLD`)**:
+   - *Vulnerability*: Mach-O load commands with the high bit set (`cmd & 0x80000000 != 0`, i.e., `LC_REQ_DYLD`) are mandatory for `dyld`. Unhandled commands with this flag were previously skipped without error, allowing binaries requiring uninspected dynamic linker features to be reported as complete.
+   - *Fix*: `inspectMach` explicitly enumerates all known benign mandatory commands (e.g. `LC_RPATH`, `LC_DYLD_INFO_ONLY`, `LC_MAIN`, `LC_DYLD_EXPORTS_TRIE`, `LC_DYLD_CHAINED_FIXUPS`, `LC_FILESET_ENTRY`). Any unknown mandatory command is appended to `Binary.Unknown`, causing `Complete: false` and blocking the release gate.
+   - *Regression Test*: Tested via synthetic Mach-O load command `0x80000099` in `floor/inspect_test.go`.
+
+### 2. Real-World Case Studies
+
+ReleaseFloor directly addresses silent compatibility regressions documented in high-profile open-source releases:
+
+| Project Incident | Root Cause | Impact | How ReleaseFloor Gating Intercepts |
+| :--- | :--- | :--- | :--- |
+| [rust-analyzer #19215](https://github.com/rust-lang/rust-analyzer/issues/19215) | ARM64 build runner environment changed from Ubuntu 20.04 to Ubuntu 22.04 without oldsysroot isolation. | `rust-analyzer-aarch64-unknown-linux-gnu` silently bumped minimum GLIBC requirement, failing on Debian 11 and enterprise LTS distros. | `releasefloor compare` diffs the candidate release against the previous tag, detects `GLIBC` floor raised (e.g. `2.31 -> 2.35`), and exits with code 1. |
+| [Go-Ethereum #32102](https://github.com/ethereum/go-ethereum/issues/32102) | Linux release binaries compiled with CGO linked against a newer host `libc.so.6`. | Geth executable failed to launch on Debian 12 with `version 'GLIBC_2.38' not found`. | `releasefloor check --policy policy.json` enforces `max_floors: {"GLIBC": "2.28"}` across all Linux assets and fails fast before publication. |
+| [DuckDB #17632](https://github.com/duckdb/duckdb/issues/17632) | Bundled precompiled dynamic library (`libduckdb.so`) for Go bindings required both newer `GLIBC` and `GLIBCXX_3.4.29`. | Users on supported enterprise distributions encountered unresolved C++ ABI symbol errors. | ReleaseFloor parses both `GLIBC` and `GLIBCXX` version nodes simultaneously from ELF `.gnu.version_r` tables, identifying multi-family floor violations. |
+
+### 3. Comparison with Existing Local Tooling
+
+ReleaseFloor does not attempt to replace ecosystem-specific packaging compilers (like `auditwheel`, `delocate`, or `cargo-dist`). Instead, it serves as a **unified, build-system-agnostic preflight gate** on the final release bundle:
+
+- **vs. `auditwheel` / `delocate`**: Ecosystem tools modify and bundle shared libraries during wheel building. ReleaseFloor inspects the final mixed `.tar.gz`, `.zip`, `.whl`, or `.jar` archive without extraction to ensure no post-packaging drift occurred.
+- **vs. `abicheck`**: `abicheck` focuses on library ABI evolution and diffing shared library interfaces. ReleaseFloor focuses on executable and library runtime floor requirements (GLIBC/macOS SDK) and multi-architecture slice consistency across release matrices.
+- **vs. Custom Shell Scripts**: ReleaseFloor eliminates fragile `readelf` / `otool` / `lipo` host tool dependencies with zero runtime execution risk and memory-bounded parsing.

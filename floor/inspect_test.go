@@ -280,3 +280,50 @@ func TestInspectEveryFixturePrefixFailsCleanly(t *testing.T) {
 		}
 	}
 }
+
+func TestELFSectionSegmentConsistencyAndMachOMandatoryCommands(t *testing.T) {
+	// 1. Inconsistent ELF section offset vs PT_LOAD segment mapping
+	elfdata := fixtureELF([]fixtureNode{{Provider: "libc.so.6", Version: "GLIBC_2.38", Symbol: "api", WeakNode: false, WeakSymbol: false}}, false)
+	f, err := elf.NewFile(bytes.NewReader(elfdata))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shoff := binary.LittleEndian.Uint64(elfdata[40:48])
+	tamperedELF := append([]byte(nil), elfdata...)
+	for i := uint16(0); i < uint16(len(f.Sections)); i++ {
+		secHdr := shoff + uint64(i)*64
+		secType := binary.LittleEndian.Uint32(tamperedELF[secHdr+4 : secHdr+8])
+		if elf.SectionType(secType) == elf.SHT_STRTAB {
+			origOff := binary.LittleEndian.Uint64(tamperedELF[secHdr+24 : secHdr+32])
+			binary.LittleEndian.PutUint64(tamperedELF[secHdr+24:secHdr+32], origOff+8)
+			break
+		}
+	}
+	_, err = Inspect(tamperedELF, "tampered-elf")
+	if err == nil || !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("tampered section offset must be rejected with ErrUnsupported, got: %v", err)
+	}
+
+	// 2. Unknown mandatory Mach-O command (LC_REQ_DYLD set)
+	unknownCmd := make([]byte, 24)
+	binary.LittleEndian.PutUint32(unknownCmd[:4], 0x80000099)
+	binary.LittleEndian.PutUint32(unknownCmd[4:8], 24)
+	machWithMandatory := fixtureMach(0x100000c, 0, 0x0b0000, 0x0f0000, false, unknownCmd)
+	bins, err := Inspect(machWithMandatory, "mach-mandatory")
+	if err != nil {
+		t.Fatalf("inspect error: %v", err)
+	}
+	if len(bins) != 1 || len(bins[0].Unknown) == 0 {
+		t.Fatalf("expected unknown mandatory command recorded, got: %#v", bins)
+	}
+	found := false
+	for _, u := range bins[0].Unknown {
+		if strings.Contains(u, "0x80000099") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 0x80000099 in Unknown, got: %v", bins[0].Unknown)
+	}
+}

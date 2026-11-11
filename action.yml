@@ -1,0 +1,32 @@
+name: 'ReleaseFloor Preflight'
+description: 'Inspect recorded runtime requirements (GLIBC, macOS minOS) across release archives before publishing.'
+author: 'feiiiiii5'
+branding:
+  icon: 'shield'
+  color: 'blue'
+inputs:
+  command:
+    description: 'ReleaseFloor command to execute: "check", "compare", or "scan"'
+    required: false
+    default: 'check'
+  args:
+    description: 'Arguments passed to the command (e.g. "--policy .github/releasefloor-policy.json dist/*.tar.gz")'
+    required: true
+  version:
+    description: 'ReleaseFloor release version to install if not already in PATH'
+    required: false
+    default: 'v0.1.0'
+runs:
+  using: 'composite'
+  steps:
+    - name: Ensure ReleaseFloor is installed
+      shell: bash
+      run: |
+        if ! command -v releasefloor >/dev/null 2>&1; then
+          echo "Installing ReleaseFloor ${{ inputs.version }} via go install..."
+          go install github.com/feiiiiii5/releasefloor/cmd/releasefloor@${{ inputs.version }}
+        fi
+    - name: Execute ReleaseFloor Preflight
+      shell: bash
+      run: |
+        releasefloor ${{ inputs.command }} ${{ inputs.args }}
