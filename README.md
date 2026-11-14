@@ -74,9 +74,9 @@ Prebuilt Linux, macOS and Windows commands are available for the [v0.1.0 pre-rel
 
 ---
 
-### Step 2: Inspect Any Release Artifact (`scan`)
+### Step 2: Inspect a Supported Release Artifact (`scan`)
 
-Run `releasefloor scan` on any compiled executable, archive (`.tar.gz`, `.zip`), Python Wheel (`.whl`), or Java JAR (`.jar`):
+Run `releasefloor scan` on ELF/Mach-O executables or libraries, including those packaged in supported archives (`.tar.gz`, `.zip`, `.whl`, `.jar`):
 
 ```sh
 releasefloor scan dist/myapp-linux-amd64.tar.gz
@@ -165,7 +165,7 @@ Add it to your Claude Desktop (`claude_desktop_config.json`) or Cursor (`mcp.jso
 ```
 
 AI Agents can now autonomously call:
-- `releasefloor_scan`: Inspect runtime requirements of any build archive.
+- `releasefloor_scan`: Inspect runtime requirements in supported release artifacts.
 - `releasefloor_compare`: Diff candidate builds against stable baselines.
 - `releasefloor_check`: Validate full release matrices against policy ceilings.
 - `releasefloor_init_policy`: Generate policy contracts automatically.
