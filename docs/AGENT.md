@@ -11,9 +11,13 @@ When an AI Agent is tasked with setting up CI/CD, bumping toolchains, cross-comp
 2. The binary runs fine on the host agent's machine.
 3. The failure only occurs on older user machines.
 
-ReleaseFloor gives agents a **single, deterministic, zero-overhead gate** to inspect final release artifacts before publishing.
+ReleaseFloor gives agents a command-line gate for inspecting recorded runtime requirements before publishing.
 
 ---
+
+## Source version
+
+MCP, `init-policy`, and wheel/JAR inputs are available in source revision `bf469b35a0fe4a1809b8073c9499bc464ec61419`, after the v0.1.0 pre-release. Install the revision documented in the [README](../README.md#step-1-install-the-documented-source-revision). The source still reports version `0.1.0`; the commit identifies the newer build.
 
 ## Agent Invocation Pattern
 
@@ -34,21 +38,21 @@ releasefloor check --policy <POLICY_JSON> --format json <ARTIFACTS...>
 
 | Exit Code | Agent Action | Meaning |
 | :---: | :--- | :--- |
-| `0` | **Proceed** | All matrix rules passed. Zero blocking changes detected. Safe to publish. |
-| `1` | **Remediate / Block** | Policy violation or requirement creep detected. Parse `report.issues` and apply the remediation playbook below. |
+| `0` | **Continue the release checks** | No blocking issue in this command's metadata checks. Review warnings and run the project's other release checks. |
+| `1` | **Inspect the report** | A policy/comparison error or incomplete coverage blocks this gate. Read `report.issues` and the inventories. |
 | `2` | **Fix Invocation** | Syntax error, missing policy, or corrupted archive. Fix arguments or inspect the archive integrity. |
 
 ---
 
 ## JSON Report Schema (`releasefloor.report.v1`)
 
-When running with `--format json`, the root object schema is:
+A shortened illustrative blocked report follows. `status` is `pass` or `blocked`; `inventories` contains the scanned artifacts. Added direct dependencies are warning-severity comparison issues and do not block on their own.
 
 ```json
 {
   "schema": "releasefloor.report.v1",
   "tool_version": "0.1.0",
-  "status": "pass" | "blocked",
+  "status": "blocked",
   "inventories": [
     {
       "schema": "releasefloor.inventory.v1",
@@ -66,7 +70,7 @@ When running with `--format json`, the root object schema is:
           "arch": "amd64",
           "kind": "executable",
           "floors": {
-            "GLIBC": "2.28",
+            "GLIBC": "2.38",
             "GLIBCXX": "3.4.28"
           },
           "libraries": ["libc.so.6", "libstdc++.so.6"]
@@ -92,19 +96,18 @@ When running with `--format json`, the root object schema is:
 When `status == "blocked"`, iterate over `report.issues` and take the recommended fix:
 
 ### 1. `policy_floor_exceeded` / `floor_raised` (e.g. `GLIBC: 2.38 exceeds 2.28`)
-- **Diagnosis**: The binary was linked against a newer host `libc.so.6` than allowed.
+- **Diagnosis**: The recorded version requirement exceeds the configured ceiling or the baseline. Inspect the build and dependencies to determine where it came from.
 - **Agent Fixes**:
-  - In GitHub Actions: Change `runs-on: ubuntu-latest` to an older runner like `ubuntu-20.04`.
-  - For Go: Ensure `CGO_ENABLED=0` if no C dependencies are required, or use `zig cc` as `CC`.
-  - For Rust: Target `x86_64-unknown-linux-musl`, use `cross`, or use `zigbuild` (`cargo-zigbuild`).
-  - For C/C++: Build inside a `manylinux` or Debian oldstable Docker container.
+  - Use a build image or sysroot matching the supported runtime baseline; pin it in CI.
+  - For Go: If the program and its dependencies support a build without CGo, evaluate `CGO_ENABLED=0`; otherwise use a suitable C toolchain and sysroot.
+  - For Rust: Review the target, linker and sysroot. A musl target changes the runtime target and should be chosen according to the program's dependencies and support policy.
+  - For C/C++: Rebuild against the intended headers and libraries, then rescan the resulting artifact.
 
 ### 2. `minimum_os_raised` / `policy_os_exceeded` (e.g. `14.0.0 exceeds 12.0.0`)
-- **Diagnosis**: The compiler target SDK raised the minimum supported macOS version.
+- **Diagnosis**: The recorded minimum macOS version increased. Check deployment-target settings and linked dependencies separately from the SDK version.
 - **Agent Fixes**:
-  - Export `MACOSX_DEPLOYMENT_TARGET=12.0` in the build environment or Makefile.
-  - For Rust: Set target deployment flag via `RUSTFLAGS="-C link-arg=-mmacosx-version-min=12.0"`.
-  - For Go: Set `CGO_CFLAGS="-mmacosx-version-min=12.0" CGO_LDFLAGS="-mmacosx-version-min=12.0"`.
+  - Configure the compiler/linker deployment target for the project's supported macOS release.
+  - Rebuild and inspect the resulting load commands. A flag alone does not establish that dependencies or toolchain runtime support that OS.
 
 ### 3. `expected_target_missing` (e.g. `macos/arm64`)
 - **Diagnosis**: A policy ceiling rule explicitly required an architecture that is completely missing from the artifact list.
@@ -122,7 +125,7 @@ When `status == "blocked"`, iterate over `report.issues` and take the recommende
 
 ## Native MCP Server (`releasefloor mcp`)
 
-ReleaseFloor includes a **built-in, zero-dependency MCP server** that speaks JSON-RPC 2.0 over standard I/O (`stdio`). No background daemon, no Node.js/Python dependencies, and sub-millisecond invocation.
+ReleaseFloor includes a **built-in MCP server** using JSON-RPC 2.0 over standard I/O (`stdio`). It runs in the CLI process and requires no Node.js or Python runtime.
 
 ### Connecting to Claude Desktop / Cursor / Antigravity
 
@@ -145,7 +148,7 @@ Or if running directly via `go`:
   "mcpServers": {
     "releasefloor": {
       "command": "go",
-      "args": ["run", "github.com/feiiiiii5/releasefloor/cmd/releasefloor@latest", "mcp"]
+      "args": ["run", "github.com/feiiiiii5/releasefloor/cmd/releasefloor@bf469b35a0fe4a1809b8073c9499bc464ec61419", "mcp"]
     }
   }
 }
@@ -174,7 +177,7 @@ When connected, the following 4 tools are automatically available to the agent:
 
 ## Function Calling Tool Definition (OpenAI / Anthropic Direct)
 
-For agents using manual function calling instead of stdio MCP, register this tool schema:
+For a custom function-calling adapter, the following provider-neutral schema describes a wrapper you implement around the CLI. Map `command`, `policy_path`, `artifacts` and `strip_components` to the corresponding arguments; registering the schema alone does not execute the command.
 
 ```json
 {
