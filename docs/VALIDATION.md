@@ -55,7 +55,11 @@ The initial local multi-asset upload timed out and left an incomplete unpublishe
 
 Subsequent documentation-only commits clarify installation, record these results and require external maintainer evidence before expanding investment. They do not move the published tag or change its binaries. There are still no verified external users, paid demand or target-program compatibility results.
 
-## Real-World Failure Case Studies & Edge-Case Regression Fixes
+## Source additions after v0.1.0 (11 November 2026)
+
+The sections below describe source revision `bf469b35a0fe4a1809b8073c9499bc464ec61419`, not the v0.1.0 release binaries. The earlier dated release validation remains unchanged.
+
+## Regression fixes and motivating reports
 
 ### 1. Edge-Case Regression Fixes (Preventing False Passes)
 
@@ -71,20 +75,18 @@ An independent code review and fuzzing inspection identified two critical edge-c
    - *Fix*: `inspectMach` explicitly enumerates all known benign mandatory commands (e.g. `LC_RPATH`, `LC_DYLD_INFO_ONLY`, `LC_MAIN`, `LC_DYLD_EXPORTS_TRIE`, `LC_DYLD_CHAINED_FIXUPS`, `LC_FILESET_ENTRY`). Any unknown mandatory command is appended to `Binary.Unknown`, causing `Complete: false` and blocking the release gate.
    - *Regression Test*: Tested via synthetic Mach-O load command `0x80000099` in `floor/inspect_test.go`.
 
-### 2. Real-World Case Studies
+### 2. Upstream compatibility reports
 
-ReleaseFloor directly addresses silent compatibility regressions documented in high-profile open-source releases:
+These reports motivate the runtime-metadata checks. They are not ReleaseFloor execution results on the reported artifacts.
 
-| Project Incident | Root Cause | Impact | How ReleaseFloor Gating Intercepts |
-| :--- | :--- | :--- | :--- |
-| [rust-analyzer #19215](https://github.com/rust-lang/rust-analyzer/issues/19215) | ARM64 build runner environment changed from Ubuntu 20.04 to Ubuntu 22.04 without oldsysroot isolation. | `rust-analyzer-aarch64-unknown-linux-gnu` silently bumped minimum GLIBC requirement, failing on Debian 11 and enterprise LTS distros. | `releasefloor compare` diffs the candidate release against the previous tag, detects `GLIBC` floor raised (e.g. `2.31 -> 2.35`), and exits with code 1. |
-| [Go-Ethereum #32102](https://github.com/ethereum/go-ethereum/issues/32102) | Linux release binaries compiled with CGO linked against a newer host `libc.so.6`. | Geth executable failed to launch on Debian 12 with `version 'GLIBC_2.38' not found`. | `releasefloor check --policy policy.json` enforces `max_floors: {"GLIBC": "2.28"}` across all Linux assets and fails fast before publication. |
-| [DuckDB #17632](https://github.com/duckdb/duckdb/issues/17632) | Bundled precompiled dynamic library (`libduckdb.so`) for Go bindings required both newer `GLIBC` and `GLIBCXX_3.4.29`. | Users on supported enterprise distributions encountered unresolved C++ ABI symbol errors. | ReleaseFloor parses both `GLIBC` and `GLIBCXX` version nodes simultaneously from ELF `.gnu.version_r` tables, identifying multi-family floor violations. |
+| Upstream report | What the reporter observed | Relevant check |
+| --- | --- | --- |
+| [rust-analyzer #19215](https://github.com/rust-lang/rust-analyzer/issues/19215) | The 2025-02-24 ARM64 build required `GLIBC_2.39`, which was unavailable in the reporter's Bookworm environment. | For a supported ELF input, inspect its recorded GLIBC requirement and compare it with a declared ceiling or a prior artifact. |
+| [Go-Ethereum #32102](https://github.com/ethereum/go-ethereum/issues/32102) | Geth v1.16.0 failed to start on Debian 12 because `GLIBC_2.38` was unavailable. | Check the final executable's recorded requirement against the project's supported runtime baseline. |
+| [DuckDB #17632](https://github.com/duckdb/duckdb/issues/17632) | Prebuilt static libraries for duckdb-go-bindings produced linking/runtime errors involving `__cxa_call_terminate`, `GLIBC_2.38` and `GLIBCXX_3.4.32` on Debian 12. | ReleaseFloor reads version requirements from final ELF executables/shared libraries. It does not inspect static `.a` libraries or diagnose the original static-link failure. |
 
-### 3. Comparison with Existing Local Tooling
+### 3. Position in a release workflow
 
-ReleaseFloor does not attempt to replace ecosystem-specific packaging compilers (like `auditwheel`, `delocate`, or `cargo-dist`). Instead, it serves as a **unified, build-system-agnostic preflight gate** on the final release bundle:
+ReleaseFloor runs after building and packaging. It inspects the final supported archive, compares recorded requirements or applies a policy, and emits a report. It does not compile software, bundle dependencies or repair an incompatible build.
 
-- **vs. `auditwheel` / `delocate`**: Ecosystem tools modify and bundle shared libraries during wheel building. ReleaseFloor inspects the final mixed `.tar.gz`, `.zip`, `.whl`, or `.jar` archive without extraction to ensure no post-packaging drift occurred.
-- **vs. `abicheck`**: `abicheck` focuses on library ABI evolution and diffing shared library interfaces. ReleaseFloor focuses on executable and library runtime floor requirements (GLIBC/macOS SDK) and multi-architecture slice consistency across release matrices.
-- **vs. Custom Shell Scripts**: ReleaseFloor eliminates fragile `readelf` / `otool` / `lipo` host tool dependencies with zero runtime execution risk and memory-bounded parsing.
+The scanner uses Go parsers without requiring `readelf`, `otool` or `lipo`, and does not execute inspected binaries. Archive input limits and coverage rules are specified in [the behavior contract](CONTRACT.md).
